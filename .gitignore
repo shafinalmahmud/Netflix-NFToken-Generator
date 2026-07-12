@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyc_*
+chatgpt_input.txt
+input.txt
+.env
