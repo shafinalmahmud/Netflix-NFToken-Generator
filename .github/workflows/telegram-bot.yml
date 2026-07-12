@@ -1,0 +1,32 @@
+name: Telegram Bot Worker
+
+on:
+  repository_dispatch:
+    types: [telegram-message]
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2  # each message should process in seconds
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Process Telegram message
+        env:
+          # The full payload from Telegram (via Cloudflare Worker → GitHub dispatch)
+          CHAT_ID: ${{ github.event.client_payload.chat_id }}
+          MSG_TEXT: ${{ github.event.client_payload.text }}
+          UPDATE_ID: ${{ github.event.client_payload.update_id }}
+          # Bot token stored as a GitHub Actions secret
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+        run: python .github/workflows/process_message.py
