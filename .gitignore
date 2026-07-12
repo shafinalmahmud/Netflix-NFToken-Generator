@@ -5,3 +5,5 @@ __pycache__/
 chatgpt_input.txt
 input.txt
 .env
+
+deploy_cf.py
