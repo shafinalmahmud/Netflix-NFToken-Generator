@@ -312,7 +312,11 @@ def handle_message():
     # ── Commands ────────────────────────────────────────────────
     if text.startswith("/"):
         clear_state()
-        return handle_command(text)
+        tg_typing()
+        reply = handle_command(text)
+        if reply:
+            tg_send(reply)
+        return
 
     # ── Plain text → check saved state ──────────────────────────
     state = load_state()
@@ -324,10 +328,15 @@ def handle_message():
             return handle_chatgpt_cookie(text)
 
     # ── No state, no command → try auto-detect ──────────────────
-    return auto_detect(text)
+    tg_typing()
+    reply = auto_detect(text)
+    if reply:
+        tg_send(reply)
+    return
 
 
 def handle_command(text):
+    """Handle a command message. Returns a reply string to send, or delegates to cookie handlers."""
     cmd = text.split()[0].lower()
 
     if cmd in (CMD_START, CMD_HELP):
