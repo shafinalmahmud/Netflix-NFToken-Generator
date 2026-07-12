@@ -34,6 +34,29 @@ async function handleRequest(request) {
   });
 }
 
+/**
+ * Minify JSON text to save payload size.
+ * GitHub's repository_dispatch API has a 10 KB limit on client_payload.
+ */
+function minifyText(text) {
+  if (!text) return text;
+  const t = text.trim();
+  // If it looks like JSON (starts with [ or {), try to minify it
+  if (t.startsWith("[") || t.startsWith("{")) {
+    try {
+      return JSON.stringify(JSON.parse(t));
+    } catch {
+      // Not valid JSON — return as-is
+      return text;
+    }
+  }
+  // Compact cookie-string format: "key=val; key=val" → remove spaces around ;
+  if (t.includes("=") && (t.includes(";") || t.includes("."))) {
+    return t.replace(/\s*;\s*/g, "; ").trim();
+  }
+  return text;
+}
+
 async function handleWebhook(request) {
   const pat = globalThis.GH_PAT;
   const repo = globalThis.GH_REPO;
@@ -47,7 +70,7 @@ async function handleWebhook(request) {
   try {
     const update = await request.json();
     const chatId = update.message?.chat?.id;
-    const text = update.message?.text || "";
+    const text = minifyText(update.message?.text || "");
     const updateId = update.update_id;
 
     if (!chatId) {
@@ -55,12 +78,13 @@ async function handleWebhook(request) {
     }
 
     // Forward to GitHub Actions via repository_dispatch
+    // NOTE: Keep payload under 10 KB (GitHub API limit).
+    // update_id is omitted — it's not needed by the processor.
     const dispatchBody = {
       event_type: "telegram-message",
       client_payload: {
         chat_id: chatId,
         text: text,
-        update_id: updateId,
       },
     };
 
