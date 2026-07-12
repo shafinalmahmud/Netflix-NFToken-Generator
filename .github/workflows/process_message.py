@@ -9,10 +9,11 @@ import importlib.util
 import json
 import os
 import re
-import subprocess
 import sys
 import urllib.parse
 from pathlib import Path
+
+import requests  # needed for GitHub API calls in state management
 
 # ---------------------------------------------------------------------------
 # Config from environment
@@ -75,23 +76,39 @@ except ImportError as e:
 
 
 # ---------------------------------------------------------------------------
-# State management (stored in GitHub repo variables)
+# State management (via GitHub Variables API)
 # ---------------------------------------------------------------------------
 
+GH_TOKEN = os.environ.get("GH_TOKEN", "")
+GH_REPO = "shafinalmahmud/Netflix-NFToken-Generator"
+
+
 def _state_key():
-    """Unique variable name per chat (GitHub variable names: letters/dashes/underscores)."""
     return f"tg_state_{CHAT_ID}"
+
+
+def _gh_api(method, path, data=None):
+    """Call the GitHub API with the repo-scoped PAT."""
+    url = f"https://api.github.com{path}"
+    headers = {
+        "Authorization": f"Bearer {GH_TOKEN}",
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "tg-bot-worker",
+    }
+    r = requests.request(method, url, headers=headers, json=data, timeout=10)
+    if r.status_code >= 400 and r.status_code != 404:
+        print(f"GitHub API {method} {path}: {r.status_code}")
+    return r
 
 
 def load_state():
     """Retrieve conversation state from GitHub repo variables."""
+    if not GH_TOKEN:
+        return None
     try:
-        r = subprocess.run(
-            ["gh", "variable", "get", _state_key()],
-            capture_output=True, text=True, timeout=10,
-        )
-        if r.returncode == 0 and r.stdout.strip():
-            return json.loads(r.stdout.strip())
+        r = _gh_api("GET", f"/repos/{GH_REPO}/actions/variables/{_state_key()}")
+        if r.status_code == 200:
+            return json.loads(r.json().get("value", "null"))
     except Exception:
         pass
     return None
@@ -99,18 +116,16 @@ def load_state():
 
 def save_state(state):
     """Persist conversation state to GitHub repo variables."""
+    if not GH_TOKEN:
+        return
     try:
-        val = json.dumps(state) if state is not None else ""
         if state is not None:
-            subprocess.run(
-                ["gh", "variable", "set", _state_key(), "--body", val],
-                capture_output=True, timeout=10,
-            )
+            val = json.dumps(state)
+            r = _gh_api("PATCH", f"/repos/{GH_REPO}/actions/variables/{_state_key()}", {"value": val})
+            if r.status_code == 404:
+                _gh_api("POST", f"/repos/{GH_REPO}/actions/variables", {"name": _state_key(), "value": val})
         else:
-            subprocess.run(
-                ["gh", "variable", "delete", _state_key()],
-                capture_output=True, timeout=10,
-            )
+            _gh_api("DELETE", f"/repos/{GH_REPO}/actions/variables/{_state_key()}")
     except Exception as e:
         print(f"State save warning: {e}")
 

@@ -23,10 +23,9 @@ jobs:
 
       - name: Process Telegram message
         env:
-          # The full payload from Telegram (via Cloudflare Worker → GitHub dispatch)
           CHAT_ID: ${{ github.event.client_payload.chat_id }}
           MSG_TEXT: ${{ github.event.client_payload.text }}
           UPDATE_ID: ${{ github.event.client_payload.update_id }}
-          # Bot token stored as a GitHub Actions secret
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: python .github/workflows/process_message.py
