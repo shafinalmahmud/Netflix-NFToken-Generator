@@ -5,6 +5,9 @@
  * Receives a Telegram update via webhook and forwards it to a GitHub
  * repository using the repository_dispatch API.
  *
+ * For large messages (exceeding Telegram's 4 KB limit), text is stored in
+ * a GitHub Actions variable first, then referenced by key in the dispatch.
+ *
  * Deploy:
  *   1. Set env vars in Cloudflare dashboard (not hardcoded):
  *      - GH_PAT     — GitHub Personal Access Token (classic, repo scope)
@@ -36,25 +39,65 @@ async function handleRequest(request) {
 
 /**
  * Minify JSON text to save payload size.
- * GitHub's repository_dispatch API has a 10 KB limit on client_payload.
  */
 function minifyText(text) {
   if (!text) return text;
   const t = text.trim();
-  // If it looks like JSON (starts with [ or {), try to minify it
   if (t.startsWith("[") || t.startsWith("{")) {
     try {
       return JSON.stringify(JSON.parse(t));
     } catch {
-      // Not valid JSON — return as-is
       return text;
     }
   }
-  // Compact cookie-string format: "key=val; key=val" → remove spaces around ;
-  if (t.includes("=") && (t.includes(";") || t.includes("."))) {
-    return t.replace(/\s*;\s*/g, "; ").trim();
-  }
   return text;
+}
+
+/**
+ * Store a large text value in a GitHub Actions variable and return its key.
+ * Variables have a 48 KB limit, much larger than the 10 KB dispatch payload cap.
+ */
+async function storeInGitHubVariable(text, chatId, pat, repo) {
+  const varName = `tg_d_${chatId}`;
+  const baseUrl = `https://api.github.com/repos/${repo}/actions/variables`;
+  const headers = {
+    Authorization: `Bearer ${pat}`,
+    Accept: "application/vnd.github+json",
+    "User-Agent": "tg-bot-worker",
+    "Content-Type": "application/json",
+  };
+
+  // Check if variable already exists
+  const getResp = await fetch(`${baseUrl}/${varName}`, {
+    method: "GET",
+    headers: headers,
+  });
+
+  let resp;
+  if (getResp.status === 404) {
+    // Create new variable
+    resp = await fetch(baseUrl, {
+      method: "POST",
+      headers: headers,
+      body: JSON.stringify({ name: varName, value: text }),
+    });
+  } else {
+    // Update existing variable
+    resp = await fetch(`${baseUrl}/${varName}`, {
+      method: "PATCH",
+      headers: headers,
+      body: JSON.stringify({ name: varName, value: text }),
+    });
+  }
+
+  if (!resp.ok && resp.status !== 204) {
+    const err = await resp.text().catch(() => "unknown");
+    console.error(`GitHub variable API error: ${resp.status} ${err}`);
+    // Fall through — dispatch the raw text even if variable storage fails
+    return null;
+  }
+
+  return varName;
 }
 
 async function handleWebhook(request) {
@@ -70,21 +113,31 @@ async function handleWebhook(request) {
   try {
     const update = await request.json();
     const chatId = update.message?.chat?.id;
-    const text = minifyText(update.message?.text || "");
-    const updateId = update.update_id;
+    const rawText = update.message?.text || "";
+    const text = minifyText(rawText);
 
     if (!chatId) {
       return new Response("OK", { status: 200 });
     }
 
+    let dispatchText = text;
+
+    // If text is large, store in GitHub variable and pass reference key
+    // (GitHub's API limit is 10 KB for the entire client_payload)
+    if (text.length > 3000) {
+      const varName = await storeInGitHubVariable(text, chatId, pat, repo);
+      if (varName) {
+        dispatchText = `__VAR__${varName}`;
+      }
+      // If variable storage failed, dispatchText stays as the raw text (best-effort)
+    }
+
     // Forward to GitHub Actions via repository_dispatch
-    // NOTE: Keep payload under 10 KB (GitHub API limit).
-    // update_id is omitted — it's not needed by the processor.
     const dispatchBody = {
       event_type: "telegram-message",
       client_payload: {
         chat_id: chatId,
-        text: text,
+        text: dispatchText,
       },
     };
 

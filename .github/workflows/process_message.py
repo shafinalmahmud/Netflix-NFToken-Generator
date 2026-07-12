@@ -135,6 +135,26 @@ def clear_state():
 
 
 # ---------------------------------------------------------------------------
+# Large-payload resolution (Cloudflare Worker stores oversized text in
+# GitHub Actions variables, references via __VAR__ prefix)
+# ---------------------------------------------------------------------------
+
+def _fetch_variable(var_name):
+    """Fetch and delete a GitHub Actions variable, returning its value."""
+    if not GH_TOKEN:
+        return None
+    try:
+        r = _gh_api("GET", f"/repos/{GH_REPO}/actions/variables/{var_name}")
+        if r.status_code == 200:
+            value = r.json().get("value", "")
+            _gh_api("DELETE", f"/repos/{GH_REPO}/actions/variables/{var_name}")
+            return value
+    except Exception as e:
+        print(f"Variable fetch warning: {e}")
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Cookie parsing (same logic as the existing modules)
 # ---------------------------------------------------------------------------
 
@@ -308,6 +328,16 @@ def process_chatgpt(cookie_text):
 def handle_message():
     """Main logic — decide what to do based on message text and state."""
     text = MSG_TEXT
+
+    # Resolve large-payload reference from Cloudflare Worker.
+    # If the text is too big for Telegram, the worker stores it in a
+    # GitHub Actions variable and sends __VAR__<varname> instead.
+    if text.startswith("__VAR__"):
+        var_name = text[len("__VAR__"):]
+        resolved = _fetch_variable(var_name)
+        if resolved is not None:
+            text = resolved.strip()
+        # else: keep original text as fallback
 
     # ── Commands ────────────────────────────────────────────────
     if text.startswith("/"):
